@@ -1,0 +1,42 @@
+{
+    "name": "mralston/bark-sdk",
+    "description": "PHP SDK for the Bark API.",
+    "keywords": [
+        "mralston",
+        "bark",
+        "laravel"
+    ],
+    "homepage": "https://github.com/mralston/bark-sdk",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Matt Ralston",
+            "email": "matt@mralston.co.uk",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^7.4|^8.0",
+        "ext-json": "*",
+        "anik/loguzz": "^2.1",
+        "guzzlehttp/guzzle": ">=6.0",
+        "nesbot/carbon": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Mralston\\Bark\\": "src"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Mralston\\Bark\\Providers\\BarkServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
