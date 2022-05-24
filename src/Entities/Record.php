@@ -2,13 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark;
+namespace Mralston\Bark\Entities;
 
+use Mralston\Bark\Client;
 use Mralston\Bark\Traits\HasAttributes;
+use Mralston\Bark\Traits\TransformsBarkDates;
 
 class Record
 {
     use HasAttributes;
+    use TransformsBarkDates;
 
     protected ?Client $client;
 

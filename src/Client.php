@@ -8,13 +8,18 @@ use Carbon\Carbon;
 use Exception;
 use Generator;
 use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\ConnectException;
-use GuzzleHttp\HandlerStack;
-use Loguzz\Formatter\RequestCurlFormatter;
-use Loguzz\Formatter\RequestJsonFormatter;
-use Loguzz\Middleware\LogMiddleware;
+use GuzzleHttp\Exception\ClientException;
+use Mralston\Bark\Entities\Bark;
+use Mralston\Bark\Entities\Buyer;
+use Mralston\Bark\Entities\Category;
+use Mralston\Bark\Entities\City;
+use Mralston\Bark\Entities\Purchase;
+use Mralston\Bark\Entities\Quote;
+use Mralston\Bark\Entities\QuoteType;
+use Mralston\Bark\Entities\StatusType;
 use Mralston\Bark\Exceptions\InvalidSinceDateException;
-use Psr\Log\Test\TestLogger;
+use Mralston\Bark\Exceptions\NotFoundException;
+use Mralston\Bark\Exceptions\UnauthorizedException;
 
 class Client
 {
@@ -32,6 +37,15 @@ class Client
 
     private ?string $webhookSecret;
 
+    private array $httpOptions = [
+//        'curl' => [
+//            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1
+//        ],
+        'proxy' => 'http://localhost:8080',
+        'verify' => false,
+//        'version' => 1.1,
+    ];
+
     /**
      * @param string $client_id
      * @param string $secret
@@ -47,31 +61,7 @@ class Client
 
         $this->apiEndpoint = $apiEndpoint;
 
-        $options = [
-            // 'length'          => 100,
-            // 'log_request'     => true,
-            // 'log_request'     => false,
-            // 'log_response'    => true,
-            // 'log_response'    => false,
-            // 'success_only'    => false,
-            // 'exceptions_only' => false,
-            // 'log_level'          => 'notice',
-//            'request_formatter'  => new RequestCurlFormatter,
-            'request_formatter'  => new RequestJsonFormatter,
-            // 'response_formatter' => new ResponseJsonFormatter,
-            // 'tag'             => 'this.is.tag',
-            // 'force_json'      => true,
-            // 'separate'        => true,
-        ];
-
-        $logger = new Logger();
-        $handlerStack = HandlerStack::create();
-        $handlerStack->push(new LogMiddleware($logger, $options), 'logger');
-
-        $this->http = new HttpClient([
-            'handler' => $handlerStack,
-            'timeout' => 10
-        ]);
+        $this->prepareHttpClient();
     }
 
     /**
@@ -92,15 +82,18 @@ class Client
         $this->accessToken = null;
         $this->accessTokenExpires = null;
 
+        $formParams = [
+            'grant_type' => 'client_credentials',
+            'client_id' => $this->client_id,
+            'client_secret' => $this->secret
+        ];
+
         $response = $this->http->post($this->apiEndpoint . '/oauth/token', [
+            ...$this->httpOptions,
             'headers' => [
                 'Content-Type' => 'application/x-www-form-urlencoded'
             ],
-            'form_params' => [
-                'grant_type' => 'client_credentials',
-                'client_id' => $this->client_id,
-                'client_secret' => $this->secret
-            ]
+            'form_params' => $formParams
         ]);
 
         if ($response->getStatusCode() != 200) {
@@ -115,124 +108,56 @@ class Client
         return true;
     }
 
-//    /**
-//     * @param string $companyId
-//     * @param Contact $contact
-//     * @param array $channels
-//     * @return Contact
-//     * @throws Exception
-//     */
-//    public function createContact(
-//        string $firstName,
-//        string $lastName,
-//        string $telephone,
-//        array $channels,
-//        ?string $companyId = null
-//    ): Contact {
-//        $this->auth();
-//
-//        if (empty($channels)) {
-//            throw new NoChannelsException();
-//        }
-//
-//        $companyId = $companyId ?? $this->companyId;
-//
-//        $response = $this->http->post($this->apiEndpoint . '/contacts', [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//            'json' => [
-//                "contact" => [
-//                    "companyId" => $companyId,
-//                    "firstName" => $firstName,
-//                    "lastName" => $lastName,
-//                    "telephone" => $telephone,
-//                    "channels" => $channels
-//                ]
-//            ]
-//        ]);
-//
-//        return new Contact(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    /**
-//     * @param Contact $contact
-//     * @return bool
-//     * @throws Exception
-//     */
-//    public function deleteContact(Contact $contact): bool
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->delete($this->apiEndpoint . '/contacts/' . $contact->id, [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//        ]);
-//
-//        return true;
-//    }
+    public function countBarks(
+        ?string $categoryId = null,
+        ?string $latitude = null,
+        ?string $longitude = null,
+        ?string $distanceMi = null,
+        ?string $cityId = null,
+        ?string $sinceDate = null
+    ) {
+        $json = $this->requestBarks(
+            '/seller/barks',
+            1,
+            $categoryId,
+            $latitude,
+            $longitude,
+            $distanceMi,
+            $cityId,
+            $sinceDate,
+        );
+
+        return $json->data->total;
+    }
 
     /**
+     * Returns a list of currently active Barks (leads) that match the logged in seller’s service area
+     *
      * @return Generator
      * @throws Exception
      */
     public function listBarks(
-        ?string $category_id = null,
+        ?string $categoryId = null,
         ?string $latitude = null,
         ?string $longitude = null,
-        ?string $distance_mi = null,
-        ?string $city_id = null,
-        ?string $since_date = null
+        ?string $distanceMi = null,
+        ?string $cityId = null,
+        ?string $sinceDate = null
     ): Generator {
-        $this->auth();
-
-        if (
-            !empty($since_date) &&
-            !in_array($since_date, [
-                '1h',
-                'today',
-                'yesterday',
-                '3d',
-                '7d',
-                '2w'
-            ])
-        ) {
-            throw new InvalidSinceDateException();
-        }
 
         $page = 1;
 
         while (true) {
-            try {
-                $response = $this->http->get($this->apiEndpoint . '/seller/barks', [
-                    'headers' => [
-                        'Content-Type' => 'application/x-www-form-urlencoded',
-                        'Accept' => 'application/vnd.bark.pub_v1+json',
-                        'Authorization' => 'Bearer ' . $this->accessToken
-                    ],
-                    'query' => [
-                        //                    'category_id' => $category_id,
-                        //                    'latitude' => $latitude,
-                        //                    'longitude' => $longitude,
-                        //                    'distance_mi' => $distance_mi,
-                        //                    'city_id' => $city_id,
-                        //                    'since_date' => $since_date,
-//                        'page' => $page,
-                    ]
-                ]);
-            } catch (\Throwable $ex) {
-                echo $ex->getCode() . "\n";
-                echo $ex->getMessage() . "\n";
-                print_r($ex->getRequest()->getHeaders());
-                echo (string)$ex->getResponse()->getBody() . "\n";
-                die();
-            }
-
-            $json = json_decode($response->getBody()->getContents());
+            $json = $this->requestBarks(
+                '/seller/barks',
+                $page,
+                $categoryId,
+                $latitude,
+                $longitude,
+                $distanceMi,
+                $cityId,
+                $sinceDate,
+            );
 
             if ($json->data->total == 0) {
                 return;
@@ -249,313 +174,576 @@ class Client
         }
     }
 
-//    /**
-//     * @param Contact $contact
-//     * @return Contact
-//     * @throws Exception
-//     */
-//    public function showContact(Contact $contact): Contact
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->get($this->apiEndpoint . '/contacts/' . $contact->id, [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//        ]);
-//
-//        return new Contact(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    /**
-//     * @param Flow $flow
-//     * @param Contact $contact
-//     * @return FlowInstance
-//     * @throws Exception
-//     */
-//    public function createFlowInstance(Flow $flow, Contact $contact, array $parameters = []): FlowInstance
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->post($this->apiEndpoint . '/flow-instances', [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//            'json' => [
-//                'flowInstance' => [
-//                    'flowId' => $flow->id,
-//                    'contactId' => $contact->id,
-//                    'templateParameters' => $parameters,
-//                ]
-//            ]
-//        ]);
-//
-//        return new FlowInstance(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    /**
-//     * @param FlowInstance $flowInstance
-//     * @return FlowInstance
-//     * @throws Exception
-//     */
-//    public function showFlowInstance(string $id): FlowInstance
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->get($this->apiEndpoint . '/flow-instances/' . $id, [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//        ]);
-//
-//        return new FlowInstance(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    /**
-//     * @param FlowInstance $flowInstance
-//     * @return FlowInstance
-//     * @throws Exception
-//     */
-//    public function inviteFlowInstance(FlowInstance $flowInstance): FlowInstance
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->post($this->apiEndpoint . '/flow-instances/' . $flowInstance->id . '/invite', [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ]
-//        ]);
-//
-//        return new FlowInstance(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    /**
-//     * @return Generator
-//     * @throws Exception
-//     */
-//    public function listFlowInstances(): Generator
-//    {
-//        $this->auth();
-//
-//        $page = 1;
-//
-//        while (true) {
-//            $response = $this->http->get($this->apiEndpoint . '/flow-instances?page=' . $page, [
-//                'headers' => [
-//                    'Authorization' => 'Bearer ' . $this->accessToken
-//                ]
-//            ]);
-//
-//            $json = json_decode($response->getBody()->getContents());
-//
-//            if (count($json->data) == 0) {
-//                return;
-//            }
-//
-//            foreach ($json->data as $flowInstance) {
-//                yield new FlowInstance(
-//                    $flowInstance,
-//                    $this
-//                );
-//            }
-//
-//            $page++;
-//        }
-//    }
-//
-//    /**
-//     * @return Generator
-//     * @throws Exception
-//     */
-//    public function listFlows(): Generator
-//    {
-//        $this->auth();
-//
-//        $page = 1;
-//
-//        while (true) {
-//            $response = $this->http->get($this->apiEndpoint . '/flows?page=' . $page, [
-//                'headers' => [
-//                    'Authorization' => 'Bearer ' . $this->accessToken
-//                ]
-//            ]);
-//
-//            $json = json_decode($response->getBody()->getContents());
-//
-//            if (count($json->data) == 0) {
-//                return;
-//            }
-//
-//            foreach ($json->data as $flow) {
-//                yield new Flow(
-//                    $flow,
-//                    $this
-//                );
-//            }
-//
-//            $page++;
-//        }
-//    }
-//
-//    /**
-//     * @param Flow $flow
-//     * @return Flow
-//     * @throws Exception
-//     */
-//    public function showFlow(string $id): Flow
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->get($this->apiEndpoint . '/flows/' . $id, [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//        ]);
-//
-//        return new Flow(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    /**
-//     * @return Generator
-//     * @throws Exception
-//     */
-//    public function listEntities(): Generator
-//    {
-//        $this->auth();
-//
-//        $page = 1;
-//
-//        while (true) {
-//            $response = $this->http->get($this->apiEndpoint . '/entities?page=' . $page, [
-//                'headers' => [
-//                    'Authorization' => 'Bearer ' . $this->accessToken
-//                ]
-//            ]);
-//
-//            $json = json_decode($response->getBody()->getContents());
-//
-//            if (count($json->data) == 0) {
-//                return;
-//            }
-//
-//            foreach ($json->data as $entity) {
-//                yield new Entity(
-//                    $entity,
-//                    $this
-//                );
-//            }
-//
-//            $page++;
-//        }
-//    }
-//
-//    /**
-//     * @param Entity $entity
-//     * @return Entity
-//     * @throws Exception
-//     */
-//    public function showEntity(string $id): Entity
-//    {
-//        $this->auth();
-//
-//        $response = $this->http->get($this->apiEndpoint . '/entities/' . $id, [
-//            'headers' => [
-//                'Authorization' => 'Bearer ' . $this->accessToken
-//            ],
-//        ]);
-//
-//        return new Entity(
-//            json_decode($response->getBody()->getContents()),
-//            $this
-//        );
-//    }
-//
-//    public function resolveWebhookChallenge(string $crcToken, ?string $webhookSecret = null)
-//    {
-//        if (empty($webhookSecret)) {
-//            $webhookSecret = $this->webhookSecret;
-//        }
-//
-//        if (empty($webhookSecret)) {
-//            throw new MissingWebhookSecretException();
-//        }
-//
-//        return json_encode([
-//            'response_token' => 'sha256=' . $this->generateHash($crcToken, $webhookSecret)
-//        ]);
-//    }
-//
-//    public function validateWebhookRequest(?string $webhookSecret = null): bool
-//    {
-//        if (empty($webhookSecret)) {
-//            $webhookSecret = $this->webhookSecret;
-//        }
-//
-//        if (empty($webhookSecret)) {
-//            throw new MissingWebhookSecretException();
-//        }
-//
-//        // Validate timestamp
-//        if (empty($_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'])) {
-//            return false;
-//        }
-//
-//        $timestamp = Carbon::createFromTimestamp($_SERVER['HTTP_X_WEBHOOK_TIMESTAMP']);
-//
-//        if ($timestamp->isBefore(Carbon::now()->subMinute())) {
-//            return false;
-//        }
-//
-//        // Check signature version is supported (currently only v1)
-//        if (($_SERVER['HTTP_X_WEBHOOK_SIGNATURE_VERSION'] ?? null) != 'v1') {
-//            return false;
-//        }
-//
-//        // Validate signature
-//        if (empty($_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])) {
-//            return false;
-//        }
-//
-//        $requestHash = $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'];
-//
-//        $calculatedHash = $this->generateHash(
-//            $_SERVER['HTTP_X_WEBHOOK_TIMESTAMP'] .
-//            '.' .
-//            file_get_contents('php://input'),
-//            $webhookSecret
-//        );
-//
-//        if ($requestHash != $calculatedHash) {
-//            return false;
-//        }
-//
-//        return true;
-//    }
-//
-//    private function generateHash($data, $secret)
-//    {
-//        return base64_encode(
-//            hash_hmac(
-//                'sha256',
-//                $data,
-//                $secret,
-//                true
-//            )
-//        );
-//    }
+    /**
+     * Returns a list of currently active Barks (leads), regardless of whether
+     * they are in the logged in user's service areas or not.
+     *
+     * @return Generator
+     * @throws Exception
+     */
+    public function searchBarks(
+        ?string $categoryId = null,
+        ?string $latitude = null,
+        ?string $longitude = null,
+        ?string $distanceMi = null,
+        ?string $cityId = null,
+        ?string $sinceDate = null
+    ): Generator {
+
+        $page = 1;
+
+        while (true) {
+            $json = $this->requestBarks(
+                '/seller/barks',
+                $page,
+                $categoryId,
+                $latitude,
+                $longitude,
+                $distanceMi,
+                $cityId,
+                $sinceDate,
+            );
+
+            if ($json->data->total == 0) {
+                return;
+            }
+
+            foreach ($json->data->items as $bark) {
+                yield new Bark(
+                    $bark,
+                    $this
+                );
+            }
+
+            $page++;
+        }
+    }
+
+    private function requestBarks(
+        string $endpoint,
+        int $page,
+        ?string $categoryId = null,
+        ?string $latitude = null,
+        ?string $longitude = null,
+        ?string $distanceMi = null,
+        ?string $cityId = null,
+        ?string $sinceDate = null,
+    ) {
+        $this->auth();
+
+        if (
+            !empty($sinceDate) &&
+            !in_array($sinceDate, [
+                '1h',
+                'today',
+                'yesterday',
+                '3d',
+                '7d',
+                '2w'
+            ])
+        ) {
+            throw new InvalidSinceDateException();
+        }
+
+        try {
+            $response = $this->http->get($this->apiEndpoint . $endpoint, [
+                ...$this->httpOptions,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/vnd.bark.pub_v1+json',
+                    'Authorization' => 'Bearer ' . $this->accessToken,
+                    'Connection' => 'close',
+                ],
+                'query' => [
+                    'category_id' => $categoryId,
+                    'latitude' => $latitude,
+                    'longitude' => $longitude,
+                    'distance_mi' => $distanceMi,
+                    'city_id' => $cityId,
+                    'since_date' => $sinceDate,
+                    'page' => $page,
+                ]
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        return json_decode($response->getBody()->getContents());
+    }
+
+    /**
+     * Gets the latest information about any particular Bark.
+     *
+     * @param int $id
+     * @return Bark
+     * @throws Exception
+     */
+    public function showBark(int $id): Bark
+    {
+        $this->auth();
+
+        try {
+            $response = $this->http->get($this->apiEndpoint . '/seller/bark/' . $id, [
+                ...$this->httpOptions,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/vnd.bark.pub_v1+json',
+                    'Authorization' => 'Bearer ' . $this->accessToken
+                ]
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            if ($ex->getCode() == 404) {
+                throw new NotFoundException('Bark ' . $id . ' does not exist.', $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        return new Bark(
+            $json->data,
+            $this
+        );
+    }
+
+    /**
+     * Mark the Bark as "not interested" for the logged in seller.
+     *
+     * @param int $id
+     * @return bool
+     * @throws NotFoundException
+     * @throws UnauthorizedException
+     */
+    public function notInterestedInBark(int $id): bool
+    {
+        $this->auth();
+
+        try {
+            $response = $this->http->post($this->apiEndpoint . '/seller/bark/' . $id . '/pass', [
+                ...$this->httpOptions,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/vnd.bark.pub_v1+json',
+                    'Authorization' => 'Bearer ' . $this->accessToken
+                ]
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            if ($ex->getCode() == 404) {
+                throw new NotFoundException('Bark ' . $id . ' does not exist.', $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        return $json->status;
+    }
+
+    /**
+     * Get a list of Barks that the seller purchased, with the most recent purchases first.
+     *
+     * @return Generator
+     * @throws InvalidSinceDateException
+     * @throws UnauthorizedException
+     */
+    public function listPurchasedBarks(): Generator
+    {
+        $this->auth();
+
+        $page = 1;
+
+        while (true) {
+            $json = $this->requestBarks(
+                '/seller/barks/purchased',
+                $page
+            );
+
+            if ($json->data->total == 0) {
+                return;
+            }
+
+            foreach ($json->data->items as $purchase) {
+                yield new Purchase(
+                    $purchase,
+                    $this
+                );
+            }
+
+            $page++;
+        }
+    }
+
+    public function showPurchasedBark($id)
+    {
+        // /seller/bark/purchased/{bark_id}
+    }
+
+    /**
+     * Purchases a Bark on behalf of the seller. The buyer will be notified by email that the seller is interested
+     * in their business, and the credits required will be debited from the seller's account. If the seller has one
+     * click enabled on their account, $oneClick will send their one-click message.
+     *
+     * @param int $id
+     * @param bool $oneClick
+     * @return false|Buyer
+     * @throws NotFoundException
+     * @throws UnauthorizedException
+     */
+    public function purchaseBark(int $id, bool $oneClick = false)
+    {
+        $this->auth();
+echo($this->apiEndpoint . '/seller/bark/' . $id . '/purchase' . ($oneClick ? '/one-click' : '') . "\n");
+        try {
+            $response = $this->http->post($this->apiEndpoint . '/seller/bark/' . $id . '/purchase' . ($oneClick ? '/one-click' : ''), [
+                ...$this->httpOptions,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/vnd.bark.pub_v1+json',
+                    'Authorization' => 'Bearer ' . $this->accessToken
+                ]
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            if ($ex->getCode() == 404) {
+                throw new NotFoundException('Bark ' . $id . ' does not exist.', $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        if (!$json->status) {
+            return false;
+        }
+
+        return new Buyer(
+            $json->buyer ?? $json->buyerInfo,
+            $this
+        );
+    }
+
+    public function setBarkQuote(int $id, Quote $quote)
+    {
+        $this->auth();
+
+        try {
+            $response = $this->http->post($this->apiEndpoint . '/seller/bark/' . $id . '/set-quote', [
+                ...$this->httpOptions,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/vnd.bark.pub_v1+json',
+                    'Authorization' => 'Bearer ' . $this->accessToken
+                ],
+                'form_params' => [
+                    'quote' => $quote->value,
+                    'type' => $quote->type,
+                    'detail' => $quote->detail,
+                ]
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            if ($ex->getCode() == 404) {
+                throw new NotFoundException('Bark ' . $id . ' does not exist.', $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        return $json->status;
+    }
+
+    /**
+     * Updates a purchased bark's status.
+     *
+     * @param int $id
+     * @param int $status_id
+     * @return mixed
+     * @throws NotFoundException
+     * @throws UnauthorizedException
+     */
+    public function setBarkStatus(int $id, int $status_id)
+    {
+        $this->auth();
+
+        try {
+            $response = $this->http->post($this->apiEndpoint . '/seller/bark/' . $id . '/set-status', [
+                ...$this->httpOptions,
+                'headers' => [
+                    'Content-Type' => 'application/x-www-form-urlencoded',
+                    'Accept' => 'application/vnd.bark.pub_v1+json',
+                    'Authorization' => 'Bearer ' . $this->accessToken
+                ],
+                'form_params' => [
+                    'status_id' => $status_id,
+                ]
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            if ($ex->getCode() == 404) {
+                throw new NotFoundException('Bark ' . $id . ' does not exist.', $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        return $json->status;
+    }
+
+    /**
+     * returns a list of major cities in Bark's active countries, to make it easier to filter
+     * listBarks and searchBarks, rather than using raw latitude and longitude.
+     *
+     * @return Generator
+     * @throws Exception
+     */
+    public function listCities(): array
+    {
+        $this->auth();
+
+        $headers = [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Accept' => 'application/vnd.bark.pub_v1+json',
+            'Authorization' => 'Bearer ' . $this->accessToken
+        ];
+
+        try {
+            $response = $this->http->get($this->apiEndpoint . '/lookups/cities', [
+                ...$this->httpOptions,
+                'headers' => $headers
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        if (count($json->data) == 0) {
+            return [];
+        }
+
+        $cities = [];
+
+        foreach ($json->data as $city) {
+            $cities[] = new City(
+                $city,
+                $this
+            );
+        }
+
+        return $cities;
+    }
+
+    /**
+     * Returns a list of all the quote types currently supported by Bark, which can be used when
+     * creating a Quote for use with setBarkQuote.
+     *
+     * @return Generator
+     * @throws Exception
+     */
+    public function listQuoteTypes(): array
+    {
+        $this->auth();
+
+        $headers = [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Accept' => 'application/vnd.bark.pub_v1+json',
+            'Authorization' => 'Bearer ' . $this->accessToken
+        ];
+
+        try {
+            $response = $this->http->get($this->apiEndpoint . '/lookups/quote-types', [
+                ...$this->httpOptions,
+                'headers' => $headers
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        if (count($json->data) == 0) {
+            return [];
+        }
+
+        $quoteTypes = [];
+
+        foreach ($json->data as $quoteType) {
+            $quoteTypes[] = new QuoteType(
+                $quoteType,
+                $this
+            );
+        }
+
+        return $quoteTypes;
+    }
+
+    /**
+     * Returns a list of all the status types currently supported by Bark, which can be used
+     * with setBarkStatus.
+     *
+     * @return Generator
+     * @throws Exception
+     */
+    public function listStatusTypes(): array
+    {
+        $this->auth();
+
+        $headers = [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Accept' => 'application/vnd.bark.pub_v1+json',
+            'Authorization' => 'Bearer ' . $this->accessToken
+        ];
+
+        try {
+            $response = $this->http->get($this->apiEndpoint . '/lookups/status-types', [
+                ...$this->httpOptions,
+                'headers' => $headers
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        if (count($json->data) == 0) {
+            return [];
+        }
+
+        $statusTypes = [];
+
+        foreach ($json->data as $statusType) {
+            $statusTypes[] = new StatusType(
+                $statusType,
+                $this
+            );
+        }
+
+        return $statusTypes;
+    }
+
+    /**
+     * @return Generator
+     * @throws Exception
+     */
+    public function listCategories(): array
+    {
+        $this->auth();
+
+
+        $headers = [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Accept' => 'application/vnd.bark.pub_v1+json',
+            'Authorization' => 'Bearer ' . $this->accessToken
+        ];
+
+        try {
+            $response = $this->http->get($this->apiEndpoint . '/lookups/categories', [
+                ...$this->httpOptions,
+                'headers' => $headers
+            ]);
+        } catch (ClientException $ex) {
+            if ($ex->getCode() == 401) {
+                $this->accessToken = null;
+                $this->accessTokenExpires = null;
+
+                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+            }
+
+            throw $ex;
+        }
+
+        $json = json_decode($response->getBody()->getContents());
+
+        if (count($json->data) == 0) {
+            return [];
+        }
+
+        $categories = [];
+
+        foreach ($json->data as $category) {
+            $categories[] = new Category(
+                $category,
+                $this
+            );
+        }
+
+        return $categories;
+    }
+
+
+
+
+    private function prepareHttpClient()
+    {
+        $this->http = new HttpClient([
+            'timeout' => 10
+        ]);
+    }
 }
