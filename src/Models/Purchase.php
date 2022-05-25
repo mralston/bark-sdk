@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
 use Carbon\Carbon;
 
-class Purchase extends Record
+class Purchase extends Model
 {
     public ?Bark $bark;
     public ?Carbon $created_at;

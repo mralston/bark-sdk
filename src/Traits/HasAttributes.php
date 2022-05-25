@@ -75,6 +75,10 @@ trait HasAttributes
 
     private function castArray($value): array
     {
+        if (is_string($value)) {
+            return [$value];
+        }
+
         $output = [];
 
         foreach ($value as $k => $v) {

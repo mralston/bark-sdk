@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
 use Carbon\Carbon;
 
-class Message extends Record
+class Message extends Model
 {
     public ?string $type;
     public ?string $label;

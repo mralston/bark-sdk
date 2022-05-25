@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
 use Carbon\Carbon;
 
-class Bark extends Record
+class Bark extends Model
 {
     public ?int $id;
     public ?Carbon $created_at;
@@ -47,5 +47,10 @@ class Bark extends Record
         }
 
         return $output;
+    }
+
+    public function buyer(): ?Buyer
+    {
+        return $this->entities['buyer'] ?? null;
     }
 }

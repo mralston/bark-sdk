@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
-class City extends Record
+class City extends Model
 {
     public ?int $id;
     public ?string $name;

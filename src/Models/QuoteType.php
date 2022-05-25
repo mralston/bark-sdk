@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
-class QuoteType extends Record
+class QuoteType extends Model
 {
     public ?string $value;
     public ?string $name;

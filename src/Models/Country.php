@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
-class Location extends Record
+class Country extends Model
 {
     public ?int $id;
     public ?string $name;

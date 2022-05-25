@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
-class Question extends Record
+class Question extends Model
 {
     public ?string $question;
     public ?string $type;
@@ -12,5 +12,9 @@ class Question extends Record
     public ?bool $is_required;
     public ?bool $is_custom_answer;
     public ?string $answer_type;
-    public ?string $answer;
+    public ?array $answer;
+
+    protected array $casts = [
+        'answer' => 'array'
+    ];
 }

@@ -9,14 +9,14 @@ use Exception;
 use Generator;
 use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\ClientException;
-use Mralston\Bark\Entities\Bark;
-use Mralston\Bark\Entities\Buyer;
-use Mralston\Bark\Entities\Category;
-use Mralston\Bark\Entities\City;
-use Mralston\Bark\Entities\Purchase;
-use Mralston\Bark\Entities\Quote;
-use Mralston\Bark\Entities\QuoteType;
-use Mralston\Bark\Entities\StatusType;
+use Mralston\Bark\Models\Bark;
+use Mralston\Bark\Models\Buyer;
+use Mralston\Bark\Models\Category;
+use Mralston\Bark\Models\City;
+use Mralston\Bark\Models\Purchase;
+use Mralston\Bark\Models\Quote;
+use Mralston\Bark\Models\QuoteType;
+use Mralston\Bark\Models\StatusType;
 use Mralston\Bark\Exceptions\InvalidSinceDateException;
 use Mralston\Bark\Exceptions\NotFoundException;
 use Mralston\Bark\Exceptions\UnauthorizedException;
@@ -146,8 +146,9 @@ class Client
     ): Generator {
 
         $page = 1;
+        $lastPage = null;
 
-        while (true) {
+        while (empty($lastPage) || $page <= $lastPage) {
             $json = $this->requestBarks(
                 '/seller/barks',
                 $page,
@@ -158,6 +159,10 @@ class Client
                 $cityId,
                 $sinceDate,
             );
+
+            if (empty($lastPage)) {
+                $lastPage = $json->data->last_page;
+            }
 
             if ($json->data->total == 0) {
                 return;
@@ -245,34 +250,48 @@ class Client
             throw new InvalidSinceDateException();
         }
 
-        try {
-            $response = $this->http->get($this->apiEndpoint . $endpoint, [
-                ...$this->httpOptions,
-                'headers' => [
-                    'Content-Type' => 'application/x-www-form-urlencoded',
-                    'Accept' => 'application/vnd.bark.pub_v1+json',
-                    'Authorization' => 'Bearer ' . $this->accessToken,
-                    'Connection' => 'close',
-                ],
-                'query' => [
-                    'category_id' => $categoryId,
-                    'latitude' => $latitude,
-                    'longitude' => $longitude,
-                    'distance_mi' => $distanceMi,
-                    'city_id' => $cityId,
-                    'since_date' => $sinceDate,
-                    'page' => $page,
-                ]
-            ]);
-        } catch (ClientException $ex) {
-            if ($ex->getCode() == 401) {
-                $this->accessToken = null;
-                $this->accessTokenExpires = null;
+        $retry = true;
 
-                throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+        while ($retry) {
+            $retry = false;
+
+            try {
+                $response = $this->http->get($this->apiEndpoint . $endpoint, [
+                    ...$this->httpOptions,
+                    'headers' => [
+                        'Content-Type' => 'application/x-www-form-urlencoded',
+                        'Accept' => 'application/vnd.bark.pub_v1+json',
+                        'Authorization' => 'Bearer ' . $this->accessToken,
+                        'Connection' => 'close',
+                    ],
+                    'query' => [
+                        'category_id' => $categoryId,
+                        'latitude' => $latitude,
+                        'longitude' => $longitude,
+                        'distance_mi' => $distanceMi,
+                        'city_id' => $cityId,
+                        'since_date' => $sinceDate,
+                        'page' => $page,
+                    ]
+                ]);
+            } catch (ClientException $ex) {
+                if ($ex->getCode() == 401) {
+                    $this->accessToken = null;
+                    $this->accessTokenExpires = null;
+
+                    throw new UnauthorizedException($ex->getMessage(), $ex->getCode());
+                }
+
+                if ($ex->getCode() == 429) {
+                    $retry = true;
+                    $backoff = (int)$ex->getResponse()->getHeader('Retry-After')[0];
+                    echo 'Rate-limit exceeded; sleeping for ' . $backoff . " seconds.\n";
+                    sleep($backoff);
+                    continue;
+                }
+
+                throw $ex;
             }
-
-            throw $ex;
         }
 
         return json_decode($response->getBody()->getContents());
@@ -374,12 +393,17 @@ class Client
         $this->auth();
 
         $page = 1;
+        $lastPage = null;
 
-        while (true) {
+        while (empty($lastPage) || $page <= $lastPage) {
             $json = $this->requestBarks(
                 '/seller/barks/purchased',
                 $page
             );
+
+            if (empty($lastPage)) {
+                $lastPage = $json->data->last_page;
+            }
 
             if ($json->data->total == 0) {
                 return;

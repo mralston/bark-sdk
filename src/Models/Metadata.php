@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
-class Metadata extends Record
+class Metadata extends Model
 {
     public ?array $images = []  ;
     public ?Country $country;

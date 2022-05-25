@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mralston\Bark\Entities;
+namespace Mralston\Bark\Models;
 
-class Buyer extends Record
+class Buyer extends Model
 {
     public ?string $name;
     public ?string $short_name;
